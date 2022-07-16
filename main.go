@@ -1,19 +1,51 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"github.com/MaxFando/k8s-go-app/config"
+	"github.com/MaxFando/k8s-go-app/server"
+	"github.com/MaxFando/k8s-go-app/version"
 	"log"
-	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 )
 
 func main() {
-	http.HandleFunc("/", handler)
+	launchMode := config.LaunchMode(os.Getenv("LAUNCH_MODE"))
+	if len(launchMode) == 0 {
+		launchMode = config.LocalEnv
+	}
+	log.Printf("LAUNCH_MODE: %v", launchMode)
 
-	port := "8080"
-	log.Printf("start server on port: %s", port)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
-}
+	cfg, err := config.Load(launchMode, "./config")
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("CONFIG: %+v", cfg)
 
-func handler(w http.ResponseWriter, _ *http.Request) {
-	_, _ = fmt.Fprint(w, "Hello World!\n")
+	info := server.VersionInfo{
+		Version: version.Version,
+		Commit:  version.Commit,
+		Build:   version.Build,
+	}
+
+	srv := server.New(info, cfg.Port)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		err := srv.Serve(ctx)
+		if err != nil {
+			log.Println(fmt.Errorf("server: %w", err))
+			return
+		}
+	}()
+
+	osSigChan := make(chan os.Signal, 1)
+	signal.Notify(osSigChan, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+
+	<-osSigChan
+	log.Println("OS interrupting signal has received")
+
+	cancel()
 }
